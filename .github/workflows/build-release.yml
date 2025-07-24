@@ -1,0 +1,145 @@
+name: Build and Release Desktop App
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+# Cấp quyền cho workflow để có thể tạo release
+permissions:
+  contents: write
+
+jobs:
+  # =======================================================
+  # JOB 1: BUILD PHIÊN BẢN CHO WINDOWS (.exe)
+  # =======================================================
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: 1. Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 2. Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: 3. Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: 4. Build Windows EXE
+        # --windowed: Ẩn cửa sổ dòng lệnh khi chạy app
+        # --onefile: Đóng gói thành một file .exe duy nhất
+        # --icon: Sử dụng file icon.ico đã chuẩn bị
+        run: pyinstaller --name "HenGioTatMay_v${{ github.run_number }}_Windows" --onefile --windowed --icon=icon.ico main.py
+      
+      - name: 5. Upload Windows Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-app
+          path: dist/HenGioTatMay_v${{ github.run_number }}_Windows.exe
+
+  # =======================================================
+  # JOB 2: BUILD PHIÊN BẢN CHO LINUX
+  # =======================================================
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 1. Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 2. Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: 3. Install System Dependencies for PyQt6 on Linux
+        # Cài đặt các thư viện hệ thống mà PyQt6 yêu cầu để chạy
+        run: sudo apt-get update && sudo apt-get install -y libxcb-xinerama0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxcb-shape0 libxkbcommon-x11-0
+
+      - name: 4. Install Python Dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: 5. Build Linux Executable
+        run: pyinstaller --name "HenGioTatMay_v${{ github.run_number }}_Linux" --onefile main.py
+
+      - name: 6. Upload Linux Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-app
+          path: dist/HenGioTatMay_v${{ github.run_number }}_Linux
+
+  # =======================================================
+  # JOB 3: BUILD PHIÊN BẢN CHO MACOS (.app)
+  # =======================================================
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - name: 1. Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 2. Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: 3. Install Python Dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: 4. Build macOS App
+        # --windowed: Tạo ra một .app bundle (đây là cách chuẩn trên macOS)
+        # --icon: Sử dụng file icon.icns đã chuẩn bị
+        # KHÔNG dùng --onefile trên macOS để đảm bảo ổn định
+        run: pyinstaller --name "HenGioTatMay" --windowed --icon=icon.icns main.py
+      
+      - name: 5. Zip the .app bundle
+        # Thư mục .app cần được nén lại thành file .zip để dễ dàng tải lên và phân phối
+        run: zip -r "HenGioTatMay_v${{ github.run_number }}_macOS.zip" dist/HenGioTatMay.app
+
+      - name: 6. Upload macOS Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-app
+          path: HenGioTatMay_v${{ github.run_number }}_macOS.zip
+
+  # =======================================================
+  # JOB 4: TẠO RELEASE (CHẠY SAU KHI CẢ 3 JOB BUILD THÀNH CÔNG)
+  # =======================================================
+  create-release:
+    runs-on: ubuntu-latest
+    # Phụ thuộc vào cả 3 job build, chỉ chạy khi tất cả thành công
+    needs: [build-windows, build-linux, build-macos] 
+    steps:
+      - name: 1. Download all build artifacts
+        uses: actions/download-artifact@v4
+        # Tải tất cả các artifact đã được build vào thư mục làm việc
+
+      - name: 2. Create Release and Upload Files
+        uses: softprops/action-gh-release@v2
+        with:
+          # Tạo tag duy nhất cho mỗi lần chạy dựa trên số thứ tự build của GitHub
+          tag_name: v${{ github.run_number }}
+          name: "Phiên bản ${{ github.run_number }} (Windows, Linux, macOS)"
+          body: |
+            **Hẹn Giờ Tắt Máy - Rikichi Pro 2025**
+            
+            Đây là phiên bản được build tự động từ commit: `${{ github.sha }}`.
+            
+            Tải về file phù hợp với hệ điều hành của bạn dưới đây.
+          # Đánh dấu đây là phiên bản chưa chính thức (pre-release)
+          prerelease: true
+          # Đường dẫn đến các file cần tải lên, dựa trên tên artifact đã tạo
+          files: |
+            windows-app/HenGioTatMay_v${{ github.run_number }}_Windows.exe
+            linux-app/HenGioTatMay_v${{ github.run_number }}_Linux
+            macos-app/HenGioTatMay_v${{ github.run_number }}_macOS.zip
